@@ -188,6 +188,14 @@ class PredictionOutput(BaseModel):
             "instead of a fabricated/wrong-model prediction. None on success."
         ),
     )
+    bundle_sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "sha256 of the served bundle FILE for a routed gold-standard model "
+            "(#2318): proves which artifact produced this output. None on the "
+            "legacy default path and for store-loaded bundles."
+        ),
+    )
 
 
 class BatchPredictionInput(BaseModel):
@@ -245,6 +253,14 @@ class BatchPredictionOutput(BaseModel):
         description=(
             "Set when the batch failed closed (e.g. unknown model_name); "
             "predictions/probabilities are empty in that case."
+        ),
+    )
+    bundle_sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "sha256 of the served bundle FILE for a routed gold-standard model "
+            "(#2318): proves which artifact produced this output. None on the "
+            "legacy default path and for store-loaded bundles."
         ),
     )
 
@@ -344,6 +360,14 @@ class ShapOutput(BaseModel):
             "(unknown model_name, no FeatureBuilder, explainer failure). None on "
             "success. The caller MUST treat a non-None error as a hard failure "
             "and NOT present fabricated SHAP."
+        ),
+    )
+    bundle_sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "sha256 of the served bundle FILE for a routed gold-standard model "
+            "(#2318): proves which artifact produced this output. None on the "
+            "legacy default path and for store-loaded bundles."
         ),
     )
 
@@ -504,14 +528,106 @@ def _is_goldstd_bundle_dict(obj: Any) -> bool:
     )
 
 
-def _unwrap_bundle(obj: Any) -> Optional[Dict[str, Any]]:
-    """Return a normalized {model, preprocessor, feature_columns} entry or None."""
+# A retrain's serving bundle (#2318, OD-1 = B): the trainer's own fitted sklearn
+# ColumnTransformer + estimator + the raw column contract. Bundles WITHOUT a
+# ``bundle_format`` key are the FeatureBuilder bundles the re-materializer writes.
+_BUNDLE_FORMAT_SKLEARN_CT_V1 = "sklearn_ct_v1"
+
+
+class _ColumnTransformerRawEncoder:
+    """Raw-covariate contract for an ``sklearn_ct_v1`` bundle (#2318).
+
+    Presents the duck-type the serving paths already use for a FeatureBuilder:
+    ``keep_columns``, ``transform(raw_df) -> DataFrame[feature_columns]`` and
+    ``_numeric_medians`` (only its KEYS are read, for numeric-vs-categorical
+    request validation). Built at load time from the bundle dict, never pickled.
+    """
+
+    def __init__(
+        self,
+        ct: Any,
+        keep_columns: List[str],
+        numeric_columns: List[str],
+        feature_columns: List[str],
+    ) -> None:
+        self._ct = ct
+        self.keep_columns = tuple(keep_columns)
+        self._numeric_medians: Dict[str, None] = dict.fromkeys(numeric_columns)
+        self._feature_columns = list(feature_columns)
+
+    def transform(self, raw: Any) -> Any:
+        import pandas as pd
+
+        missing = [c for c in self.keep_columns if c not in raw.columns]
+        if missing:
+            raise ValueError(f"raw_features missing covariate(s): {missing}")
+        # Hand the transformer exactly its fit-time columns, in fit order. A
+        # fitted ColumnTransformer selects by name (measured on 1.6.1: reordered
+        # and extra columns give identical output), so this is defensive: the
+        # encoded matrix never depends on request key order or stray keys.
+        out = self._ct.transform(raw[list(self.keep_columns)])
+        return pd.DataFrame(out, columns=self._feature_columns, index=raw.index)
+
+
+def _ct_raw_encoder(obj: Dict[str, Any]) -> Optional[_ColumnTransformerRawEncoder]:
+    """Build the adapter for an ``sklearn_ct_v1`` bundle, or None when its declared
+    contract disagrees with its fitted ColumnTransformer (serving it would label
+    encoded values/SHAP with the wrong names)."""
+    ct = obj.get("preprocessor")
+    keep = obj.get("keep_columns")
+    numeric = obj.get("numeric_columns")
+    feats = obj.get("feature_columns")
+    if not (isinstance(keep, list) and isinstance(numeric, list) and isinstance(feats, list)):
+        logger.warning("sklearn_ct_v1 bundle lacks keep/numeric/feature column lists")
+        return None
+    try:
+        fitted_in = [str(c) for c in ct.feature_names_in_]
+        fitted_out = [str(n) for n in ct.get_feature_names_out()]
+    except Exception as e:
+        logger.warning("sklearn_ct_v1 preprocessor is not a fitted ColumnTransformer: %s", e)
+        return None
+    # The declared names label every encoded value and SHAP contribution, so they
+    # must equal the transformer's own output names IN ORDER — verbatim, or with
+    # the ``num__``/``cat__`` prefixes the bundle contract strips.
+    stripped = [n.split("__", 1)[1] if n.startswith(("num__", "cat__")) else n for n in fitted_out]
+    declared = [str(c) for c in feats]
+    if (
+        fitted_in != [str(c) for c in keep]
+        or declared not in (fitted_out, stripped)
+        or not set(numeric) <= set(keep)
+    ):
+        logger.warning(
+            "sklearn_ct_v1 contract mismatch: keep_columns=%s fitted_in=%s, "
+            "feature_columns=%s fitted_out=%s",
+            keep,
+            fitted_in,
+            declared,
+            fitted_out,
+        )
+        return None
+    return _ColumnTransformerRawEncoder(ct, keep, numeric, feats)
+
+
+def _unwrap_bundle(obj: Any, bundle_sha256: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return a normalized {model, preprocessor, feature_columns, bundle_sha256}
+    entry, or None for a non-bundle, an unknown ``bundle_format`` or an
+    ``sklearn_ct_v1`` bundle whose contract is inconsistent (fail closed)."""
     if not _is_goldstd_bundle_dict(obj):
+        return None
+    preprocessor = obj.get("preprocessor")
+    fmt = obj.get("bundle_format")
+    if fmt == _BUNDLE_FORMAT_SKLEARN_CT_V1:
+        preprocessor = _ct_raw_encoder(obj)
+        if preprocessor is None:
+            return None
+    elif fmt is not None:
+        logger.warning("Unknown bundle_format %r; not serving it.", fmt)
         return None
     return {
         "model": obj.get("model"),
-        "preprocessor": obj.get("preprocessor"),
+        "preprocessor": preprocessor,
         "feature_columns": obj.get("feature_columns"),
+        "bundle_sha256": bundle_sha256,
     }
 
 
@@ -554,31 +670,49 @@ def _discover_goldstd_bundles_from_fs(root: Optional[str] = None) -> Dict[str, D
 
     Fallback for when the bundles are on disk but not (yet) imported to the
     BentoML store. Walks ``data/ml_artifacts/shap_serving/<cohort>/<name>.bundle.pkl``.
+
+    Each entry carries ``bundle_sha256``, the sha256 of the file's bytes, so the
+    service can report exactly which artifact it serves (#2318). A name found in
+    more than one file is DROPPED (fail closed): ``os.walk`` order is not a
+    contract, so keeping the first one seen would serve a file at random.
     """
     found: Dict[str, Dict[str, Any]] = {}
     base = root or _SHAP_SERVING_DIRNAME
     if not os.path.isdir(base):
         return found
+    import hashlib
     import pickle as _pickle
 
+    paths_by_name: Dict[str, List[str]] = {}
     for dirpath, _dirnames, filenames in os.walk(base):
         for fn in filenames:
             if not fn.endswith(".bundle.pkl"):
                 continue
             name = fn[: -len(".bundle.pkl")]
-            if not name.endswith(_GOLDSTD_NAME_SUFFIX):
+            if name.endswith(_GOLDSTD_NAME_SUFFIX):
+                paths_by_name.setdefault(name, []).append(os.path.join(dirpath, fn))
+
+    for name, paths in sorted(paths_by_name.items()):
+        if len(paths) > 1:
+            logger.error(
+                "FS discovery: duplicate bundle files for %s (%s); refusing to serve "
+                "either — which one is served would depend on os.walk order.",
+                name,
+                ", ".join(sorted(paths)),
+            )
+            continue
+        path = paths[0]
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            obj = _pickle.loads(data)  # noqa: S301 - trusted local artifact
+            entry = _unwrap_bundle(obj, bundle_sha256=hashlib.sha256(data).hexdigest())
+            if entry is None:
+                logger.warning("FS discovery: %s is not a servable bundle; skipping.", path)
                 continue
-            path = os.path.join(dirpath, fn)
-            try:
-                with open(path, "rb") as fh:
-                    obj = _pickle.load(fh)  # noqa: S301 - trusted local artifact
-                entry = _unwrap_bundle(obj)
-                if entry is None:
-                    logger.warning("FS discovery: %s is not a bundle dict; skipping.", path)
-                    continue
-                found.setdefault(name, entry)
-            except Exception as e:
-                logger.warning("FS discovery: failed to load %s: %s", path, e)
+            found[name] = entry
+        except Exception as e:
+            logger.warning("FS discovery: failed to load %s: %s", path, e)
     return found
 
 
@@ -636,6 +770,16 @@ class E2IModelService:
 
         self._model, self._model_tag, self._framework = _discover_model()
 
+        # A dict carrying ``bundle_format`` gets the same checks + adapter as a
+        # routed bundle (#2318); one they refuse is not served as the default.
+        if isinstance(self._model, dict) and "bundle_format" in self._model:
+            entry = _unwrap_bundle(self._model)
+            if entry is None:
+                logger.error("Default model %s is not a servable bundle.", self._model_tag)
+                self._model = None
+            else:
+                self._model = entry
+
         # Unwrap bundled dict if model is a dict (contains preprocessor)
         if isinstance(self._model, dict):
             self._preprocessor = self._model.get("preprocessor")
@@ -677,6 +821,14 @@ class E2IModelService:
                 None,
             )
         return (self._model, self._preprocessor, self._feature_columns, self._model_tag, None)
+
+    def _bundle_sha256(self, model_name: Optional[str]) -> Optional[str]:
+        """sha256 of the routed bundle's file (#2318), or None (legacy default
+        path, unknown name, store-loaded bundle)."""
+        if not model_name:
+            return None
+        entry = self._models.get(model_name)
+        return entry.get("bundle_sha256") if entry else None
 
     def _resolve_feature_columns(
         self, model: Any = _UNSET, feature_columns: Any = _UNSET
@@ -1324,7 +1476,7 @@ class E2IModelService:
                 feature_view=input_data.feature_view,
                 entity_key=input_data.entity_key,
             )
-            return self._run_prediction(
+            out = self._run_prediction(
                 features,
                 feature_source="feast_online",
                 model=model,
@@ -1332,22 +1484,26 @@ class E2IModelService:
                 feature_columns=feature_columns,
                 model_tag=model_tag,
             )
+            out.bundle_sha256 = self._bundle_sha256(input_data.model_name)
+            return out
 
         # RAW covariate path (#39): gold-standard cohort models bundle a
         # FeatureBuilder preprocessor and expect the RAW covariates. Takes
         # precedence over the legacy numeric ``features`` matrix when present.
         # Routes to the resolved (possibly multi-model) components.
         if input_data.raw_features:
-            return self._run_raw_prediction(
+            out = self._run_raw_prediction(
                 input_data.raw_features,
                 model=model,
                 preprocessor=preprocessor,
                 feature_columns=feature_columns,
                 model_tag=model_tag,
             )
+            out.bundle_sha256 = self._bundle_sha256(input_data.model_name)
+            return out
 
         feature_source = "user_provided" if input_data.features else None
-        return self._run_prediction(
+        out = self._run_prediction(
             input_data.features,
             feature_source=feature_source,
             model=model,
@@ -1355,6 +1511,8 @@ class E2IModelService:
             feature_columns=feature_columns,
             model_tag=model_tag,
         )
+        out.bundle_sha256 = self._bundle_sha256(input_data.model_name)
+        return out
 
     @bentoml.api
     async def predict_batch(self, input_data: BatchPredictionInput) -> BatchPredictionOutput:
@@ -1401,6 +1559,55 @@ class E2IModelService:
                 predictions=out.predictions,
                 probabilities=out.probabilities,
                 processing_time_ms=elapsed_ms,
+                bundle_sha256=self._bundle_sha256(input_data.model_name),
+            )
+
+        # A named model with a numeric matrix (#2318): route to that model instead
+        # of silently scoring the legacy default model.
+        if input_data.model_name:
+            model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
+                input_data.model_name
+            )
+            if err is not None:
+                return BatchPredictionOutput(
+                    batch_id=input_data.batch_id,
+                    total_samples=len(input_data.features),
+                    predictions=[],
+                    probabilities=[],
+                    processing_time_ms=0.0,
+                    error=err,
+                )
+            if preprocessor is not None:
+                # A routed bundle's preprocessor maps RAW covariates to the model's
+                # encoded vector; a numeric matrix is ambiguous (already encoded?)
+                # and re-transforming it mis-encodes it. Fail closed, don't guess.
+                return BatchPredictionOutput(
+                    batch_id=input_data.batch_id,
+                    total_samples=len(input_data.features),
+                    predictions=[],
+                    probabilities=[],
+                    processing_time_ms=0.0,
+                    error=(
+                        f"{input_data.model_name} encodes raw covariates; send "
+                        "raw_features, not a numeric features matrix"
+                    ),
+                    bundle_sha256=self._bundle_sha256(input_data.model_name),
+                )
+            out = self._run_prediction(
+                input_data.features,
+                feature_source="user_provided" if input_data.features else None,
+                model=model,
+                preprocessor=preprocessor,
+                feature_columns=feature_columns,
+                model_tag=model_tag,
+            )
+            return BatchPredictionOutput(
+                batch_id=input_data.batch_id,
+                total_samples=len(input_data.features),
+                predictions=out.predictions,
+                probabilities=out.probabilities,
+                processing_time_ms=(time.time() - start) * 1000,
+                bundle_sha256=self._bundle_sha256(input_data.model_name),
             )
 
         if self._model is None:
@@ -1527,6 +1734,8 @@ class E2IModelService:
             "keep_columns": self._resolve_keep_columns(preprocessor),
             # Loaded gold-standard serving names (multi-model #39).
             "available_models": available_models,
+            # sha256 of the routed bundle's file (#2318): which artifact is served.
+            "bundle_sha256": self._bundle_sha256(requested),
         }
 
         # Add model metadata if available (legacy default path only — routed
@@ -1573,7 +1782,7 @@ class E2IModelService:
         if err is not None:
             return ShapOutput(model_id=input_data.model_name or "unknown_model", error=err)
 
-        return self._run_shap_explanation(
+        out = self._run_shap_explanation(
             input_data.raw_features,
             top_k=input_data.top_k,
             model=model,
@@ -1581,3 +1790,5 @@ class E2IModelService:
             feature_columns=feature_columns,
             model_tag=model_tag,
         )
+        out.bundle_sha256 = self._bundle_sha256(input_data.model_name)
+        return out
