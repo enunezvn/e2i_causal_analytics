@@ -1,0 +1,59 @@
+run_at 2026-10-01T00:44:00.906274+00:00
+git_head 8845cd65d
+api image_sha: 8845cd65d9041f936ccb8b594389c824d068e229
+sidecar image_id: sha256:b32c2ff93c4daa5d7a754e59f663cef571af09828195a12360e100b9320b3533 started_at: 2026-10-01T00:40:18.298824523Z
+sidecar sklearn: 1.6.1
+model_info hcp_adoption_fabhalta_goldstd_lr_v1: model_id=hcp_adoption_fabhalta_goldstd_lr_v1 bundle_sha256=eb1fa337f35cd8eceaf450bbef814c135fa60c225acd56ad539ef5925b00fa07 keep_columns=['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region']
+model_info hcp_adoption_kisqali_goldstd_lr_v1: model_id=hcp_adoption_kisqali_goldstd_lr_v1 bundle_sha256=2878366567378bc6ee000001d202f0878de7aea1bfecba0ffaa5b0ab501ce786 keep_columns=['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region']
+model_info initiation_fabhalta_goldstd_lr_v1: model_id=initiation_fabhalta_goldstd_lr_v1 bundle_sha256=faed35c3fa450b22082f81ebe09e5a3f8ffaffd070433e53af7f469243e57426 keep_columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted']
+model_info initiation_kisqali_goldstd_lr_v1: model_id=initiation_kisqali_goldstd_lr_v1 bundle_sha256=5e7a18962db5e4fd5c06a72414ceb206bd31ab22f485e3407502ab2e7eaf5125 keep_columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted']
+
+=== model=hcp_adoption_kisqali_goldstd_lr_v1 brand=Kisqali n=8 (test split, ordered by row id)
+row_id                single_p     batch_p    absdiff s_pred b_pred     other_p   pre2339_p pre_post_d
+scvhcp_03979        0.86840653  0.86840653   0.00e+00    1.0    1.0  0.94244345  0.86840653   4.73e-09
+scvhcp_03986        0.27800187  0.27800187   0.00e+00    0.0    0.0  0.34267388  0.27800187   3.81e-09
+scvhcp_03990        0.73017685  0.73017685   0.00e+00    1.0    1.0  0.46702117  0.73017685   1.70e-09
+scvhcp_03991        0.85675926  0.85675926   0.00e+00    1.0    1.0  0.68639145  0.85675926   4.24e-09
+scvhcp_03995        0.79713805  0.79713805   0.00e+00    1.0    1.0  0.93369385  0.79713805   6.58e-10
+scvhcp_03996        0.24875031  0.24875031   0.00e+00    0.0    0.0  0.31172844  0.24875031   1.63e-09
+scvhcp_03998        0.79332456  0.79332456   0.00e+00    1.0    1.0  0.57230812  0.79332456   2.86e-09
+scvhcp_04000        0.19793701  0.19793701   0.00e+00    0.0    0.0  0.18254926  0.19793701   2.74e-09
+max|single-batch|=0.000e+00  predictions_equal=True  single model_version=['hcp_adoption_kisqali_goldstd_lr_v1']  batch model_version=['None'] (#2351: batch rows carry no model_version)
+teeth: max|batch(hcp_adoption_kisqali_goldstd_lr_v1) - batch(hcp_adoption_fabhalta_goldstd_lr_v1)|=0.2632  (must be > 0.001)
+model_verdict PASS
+teeth: sidecar default (no model_name) raw batch: status=200 error=None n_pred=0
+
+=== model=hcp_adoption_fabhalta_goldstd_lr_v1 brand=Fabhalta n=8 (test split, ordered by row id)
+row_id                single_p     batch_p    absdiff s_pred b_pred     other_p   pre2339_p pre_post_d
+scvhcp_03982        0.33710292  0.33710292   0.00e+00    0.0    0.0  0.60202004  0.33710292   3.93e-09
+scvhcp_03989        0.72228440  0.72228440   0.00e+00    1.0    1.0  0.43867439  0.72228440   2.30e-09
+scvhcp_03993        0.71591932  0.71591932   0.00e+00    1.0    1.0  0.61079297  0.71591932   2.77e-09
+scvhcp_03995        0.93369385  0.93369385   0.00e+00    1.0    1.0  0.79713805  0.93369385   3.45e-10
+scvhcp_03998        0.57230812  0.57230812   0.00e+00    1.0    1.0  0.79332456  0.57230812   4.20e-09
+scvhcp_03999        0.45877082  0.45877082   0.00e+00    0.0    0.0  0.25845551  0.45877082   4.43e-09
+scvhcp_04002        0.78289866  0.78289866   0.00e+00    1.0    1.0  0.68004907  0.78289866   3.92e-09
+scvhcp_04007        0.91312426  0.91312426   0.00e+00    1.0    1.0  0.72644157  0.91312426   3.16e-09
+max|single-batch|=0.000e+00  predictions_equal=True  single model_version=['hcp_adoption_fabhalta_goldstd_lr_v1']  batch model_version=['None'] (#2351: batch rows carry no model_version)
+teeth: max|batch(hcp_adoption_fabhalta_goldstd_lr_v1) - batch(hcp_adoption_kisqali_goldstd_lr_v1)|=0.2836  (must be > 0.001)
+model_verdict PASS
+teeth: sidecar default (no model_name) raw batch: status=200 error=None n_pred=0
+
+=== model=initiation_kisqali_goldstd_lr_v1 brand=Kisqali n=8 (test split, ordered by row id)
+row_id                single_p     batch_p    absdiff s_pred b_pred     other_p   pre2339_p pre_post_d
+scvpatient_000012   0.48285031  0.48285031   1.11e-16    0.0    0.0  0.49197637         n/a           
+scvpatient_000035   0.64478866  0.64478866   1.11e-16    1.0    1.0  0.67674381         n/a           
+scvpatient_000127   0.22253477  0.22253477   0.00e+00    0.0    0.0  0.25013889         n/a           
+scvpatient_000142   0.02860228  0.02860228   0.00e+00    0.0    0.0  0.03002428         n/a           
+scvpatient_000149   0.74421370  0.74421370   0.00e+00    1.0    1.0  0.73902317         n/a           
+scvpatient_000250   0.46682487  0.46682487   5.55e-17    0.0    0.0  0.46746593         n/a           
+scvpatient_000251   0.40176118  0.40176118   0.00e+00    0.0    0.0  0.44522062         n/a           
+scvpatient_000264   0.48360584  0.48360584   0.00e+00    0.0    0.0  0.48745147         n/a           
+max|single-batch|=1.110e-16  predictions_equal=True  single model_version=['initiation_kisqali_goldstd_lr_v1']  batch model_version=['None'] (#2351: batch rows carry no model_version)
+teeth: max|batch(initiation_kisqali_goldstd_lr_v1) - batch(initiation_fabhalta_goldstd_lr_v1)|=0.0435  (must be > 0.001)
+model_verdict PASS
+teeth: sidecar default (no model_name) raw batch: status=200 error=None n_pred=0
+
+pre->post #2339 single-predict: rows_compared=16 max|post-pre|=4.733e-09 (baseline printed 8 dp, resolution ~5e-9)
+pre_post_verdict PASS
+
+VERDICT PASS
