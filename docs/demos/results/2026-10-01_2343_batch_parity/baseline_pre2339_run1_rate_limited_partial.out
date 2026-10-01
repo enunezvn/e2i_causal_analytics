@@ -1,0 +1,27 @@
+run_at 2026-09-30T22:05:20.318702+00:00
+git_head 9f66d1015
+
+=== model=hcp_adoption_kisqali_goldstd_lr_v1 brand=Kisqali n=8 (test split, ordered by hcp_id)
+hcp_id          single_p     batch_p    absdiff s_pred b_pred     other_p
+scvhcp_03979  0.86840653  0.86840653   0.00e+00    1.0    1.0  0.94244345
+scvhcp_03986  0.27800187  0.27800187   0.00e+00    0.0    0.0  0.34267388
+scvhcp_03990  0.73017685  0.73017685   0.00e+00    1.0    1.0  0.46702117
+scvhcp_03991  0.85675926  0.85675926   0.00e+00    1.0    1.0  0.68639145
+scvhcp_03995  0.79713805  0.79713805   0.00e+00    1.0    1.0  0.93369385
+scvhcp_03996  0.24875031  0.24875031   0.00e+00    0.0    0.0  0.31172844
+scvhcp_03998  0.79332456  0.79332456   0.00e+00    1.0    1.0  0.57230812
+scvhcp_04000  0.19793701  0.19793701   0.00e+00    0.0    0.0  0.18254926
+max|single-batch|=0.000e+00  predictions_equal=True  model_version(s)=['None', 'hcp_adoption_kisqali_goldstd_lr_v1']
+max|batch(hcp_adoption_kisqali_goldstd_lr_v1) - batch(hcp_adoption_fabhalta_goldstd_lr_v1)|=0.2632  other model_version=None
+model_verdict FAIL
+sidecar default (no model_name) raw batch: status=200 error=None n_pred=0
+
+=== model=hcp_adoption_fabhalta_goldstd_lr_v1 brand=Fabhalta n=8 (test split, ordered by hcp_id)
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/716e8ae7-4a36-4c84-bb18-83ce8535e227/scratchpad/parity_2343/live_batch_single_parity_2343.py", line 114, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/716e8ae7-4a36-4c84-bb18-83ce8535e227/scratchpad/parity_2343/live_batch_single_parity_2343.py", line 85, in main
+    assert st == 200, (st, bb)
+           ^^^^^^^^^
+AssertionError: (429, {'error': 'Too Many Requests', 'message': 'Rate limit exceeded. Maximum 10 requests per 60 seconds.', 'retry_after': 60})
