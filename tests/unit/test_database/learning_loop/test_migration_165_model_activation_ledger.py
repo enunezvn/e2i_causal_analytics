@@ -1705,6 +1705,7 @@ def test_a_registry_writer_meets_a_running_rollback_fast_instead_of_deadlocking(
             w.rollback()
     worker.join(120)
     assert not worker.is_alive()
+    assert err.value.sqlstate == "55P03", (err.value.sqlstate, err.value)  # lock_not_available
     assert "migration 165" in str(err.value) and "deadlock" not in str(err.value), err.value
     assert elapsed < 1.0, elapsed  # deadlock_timeout is 1 s: this was NOWAIT, not the detector
     proc = out["proc"]
@@ -1712,6 +1713,32 @@ def test_a_registry_writer_meets_a_running_rollback_fast_instead_of_deadlocking(
     assert db.rows("select to_regclass('public.ml_model_activations_retired_165') is not null") == [
         "t"
     ]
+
+
+def test_autovacuum_class_locks_on_the_ledger_do_not_refuse_registry_writers(db):
+    """codex r3 LOW: the guard's NOWAIT lock is ACCESS SHARE, which conflicts only with ACCESS
+    EXCLUSIVE. SHARE UPDATE EXCLUSIVE (autovacuum, ANALYZE, CREATE INDEX CONCURRENTLY) on the
+    ledger must not make the weekly writer fail."""
+    s = Slot(db)
+    aid = s.switched()
+    s.activate(aid)
+    with db.connect() as vac:
+        vac.execute("lock table ml_model_activations in share update exclusive mode")
+        with db.connect() as w:
+            w.execute('set role "service_role"')
+            w.execute("set local lock_timeout = '5s'")  # a wait would surface as an error
+            t0 = time.monotonic()
+            w.execute(UPSERT, (s.exp, s.name, False, s.p_artifact))
+            w.execute("update ml_model_registry set stage = 'staging', auc = 0.7 where id = %s",
+                      (s.c,))  # fmt: skip
+            elapsed = time.monotonic() - t0
+            w.commit()
+        vac.rollback()
+    assert elapsed < 2.0, elapsed
+    p, c = s.reg(s.p), s.reg(s.c)
+    assert (p["stage"], float(p["auc"])) == ("archived", 0.9)  # role kept, refit landed
+    assert (c["stage"], float(c["auc"])) == ("staging", 0.7)
+    assert s.canonical() == [s.c]
 
 
 def test_the_rollback_file_waits_for_an_uncommitted_activation_then_refuses(db):
