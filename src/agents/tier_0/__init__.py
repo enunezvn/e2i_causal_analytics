@@ -18,6 +18,9 @@ Usage:
         "business_objective": "Increase market share",
         "target_outcome": "conversion",
         "data_source": "business_metrics",
+        # Required (#2335): the declared features, or a table cohort data_source
+        # ({"type": "table", ..., "columns": [...]}) — else the scope stage fails closed.
+        "candidate_features": ["engagement_score", "prior_rx_volume"],
     })
 """
 

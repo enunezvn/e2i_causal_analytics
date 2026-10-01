@@ -28,7 +28,7 @@ consumer migration is complete.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from src.agents.ml_foundation._pydantic_utils import (
@@ -75,8 +75,12 @@ class ScopeDefinerState(BaseAgentSchema):
     # node. Accepted as ``target_variable_hint``'s alias; prefer the hint name.
     target_variable: Optional[str] = None
 
-    # Features (optional)
+    # Features: the DECLARED requirement (#2335). No placeholder default —
+    # scope_builder resolves explicit candidate_features, else a table cohort
+    # ``data_source``'s columns minus the target, and fails closed without either. The
+    # provenance (explicit | contract) is derived from which one declared them.
     candidate_features: Optional[List[str]] = None
+    data_source: Optional[Union[str, Dict[str, Any]]] = None
 
     # Constraints (optional)
     time_budget_hours: Optional[float] = None

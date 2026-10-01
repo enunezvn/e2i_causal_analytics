@@ -8,8 +8,10 @@ is self-healing through the registry contract.
   test_retraining_execute_heals_contract_2207.py — codex r1 HIGH-2);
 - ``ml_retraining_history.model_id`` is set to the registry row's id (it was never
   written before: 0 rows carried it);
-- a request with no contract anywhere behaves exactly as today (no data_source in the
-  training config, ``model_id`` NULL, the job fails closed at execution).
+- a request with no contract anywhere used to be recorded and enqueued, then fail closed
+  at execution; since #2335 the trigger refuses it (422, nothing recorded) because it
+  declares no required features. A column-less contract is completed by the request's
+  ``candidate_features``.
 
 The service's repositories are the real facades over an in-memory async supabase fake
 (``tests/unit/_fakes/async_supabase.py``); only the drift-history read, the performance
@@ -91,7 +93,8 @@ async def test_request_without_contract_falls_back_to_the_registry_row():
         cohort_target_outcome="treatment_initiated",
         cohort_feature_manifest_source="synthetic",
     )
-    job, queued = await _trigger(db, cohort=None)
+    # #2335: a bare table name declares no columns, so the request declares the features.
+    job, queued = await _trigger(db, cohort={"candidate_features": ["disease_severity"]})
     tc = queued["training_config"]
     assert tc["data_source"] == "patient_journeys"
     assert tc["target_outcome"] == "treatment_initiated"
@@ -107,7 +110,12 @@ async def test_request_without_contract_falls_back_to_the_registry_row():
 async def test_explicit_request_values_win_over_the_registry_row():
     db, _ = _db(cohort_data_source="patient_journeys", cohort_target_outcome="treatment_initiated")
     _, queued = await _trigger(
-        db, cohort={"data_source": "data/rwd/optum/initiation", "brand": "Kisqali"}
+        db,
+        cohort={
+            "data_source": "data/rwd/optum/initiation",
+            "brand": "Kisqali",
+            "candidate_features": ["age_at_index"],  # #2335: file route declares none
+        },
     )
     tc = queued["training_config"]
     assert tc["data_source"] == "data/rwd/optum/initiation"  # explicit
@@ -125,6 +133,7 @@ async def test_the_trigger_never_writes_the_registry_row():
         "data_source": "patient_journeys",
         "target_outcome": "treatment_initiated",
         "feature_manifest_source": "synthetic",
+        "candidate_features": ["disease_severity"],  # #2335: declared requirement
     }
     _, queued = await _trigger(db, cohort=contract)
     assert queued["training_config"]["data_source"] == "patient_journeys"  # the job gets it
@@ -138,15 +147,17 @@ async def test_the_trigger_never_writes_the_registry_row():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_no_contract_anywhere_behaves_as_today():
-    db, rid = _db()
-    job, queued = await _trigger(db, cohort=None)
-    tc = queued["training_config"]
-    assert "data_source" not in tc and "target_outcome" not in tc
-    (history,) = db.rows("ml_retraining_history")
-    assert history["status"] == "pending"
-    assert history["model_id"] == rid  # the id is still resolved and recorded
-    assert job.job_id == history["id"]
+async def test_no_contract_anywhere_is_refused_before_anything_is_recorded():
+    """#2335: this job used to be recorded ``pending`` and enqueued only to fail closed at
+    execution. It declares no required features, so the trigger now refuses it."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    db, _ = _db()
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, cohort=None)
+    assert exc.value.reason == "undeclared_required_features"
+    assert exc.value.http_status == 422
+    assert db.rows("ml_retraining_history") == []
 
 
 @pytest.mark.unit

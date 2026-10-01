@@ -261,6 +261,7 @@ class TestScopeDefiner:
             "target_outcome": TEST_CONFIG["target_outcome"],
             "problem_type_hint": TEST_CONFIG["problem_type"],
             "brand": TEST_CONFIG["brand"],
+            "candidate_features": ["days_on_therapy"],  # #2335: declared requirement
         }
 
         result = await agent.run(input_data)
@@ -286,6 +287,7 @@ class TestScopeDefiner:
                 "business_objective": "Test objective",
                 "target_outcome": "target",
                 "problem_type_hint": "binary_classification",
+                "candidate_features": ["days_on_therapy"],  # #2335: declared requirement
             }
         )
 
@@ -879,6 +881,7 @@ class TestTier0EndToEnd:
                 "business_objective": "Early risk identification",
                 "target_outcome": TEST_CONFIG["target_outcome"],
                 "problem_type_hint": TEST_CONFIG["problem_type"],
+                "candidate_features": ["days_on_therapy"],  # #2335: declared requirement
             }
         )
         pipeline_state["scope_spec"] = scope_result.get("scope_spec", {})

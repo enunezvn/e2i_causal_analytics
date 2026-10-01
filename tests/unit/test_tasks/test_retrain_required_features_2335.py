@@ -12,7 +12,10 @@ not have.
 
 A table contract already declares the exact columns it loads (migrations 151 / 163:
 ``columns`` = the goldstd covariates + the label). Those covariates are what the parent
-was trained on, so they are what the retrain requires. These tests drive the real
+was trained on, so they are what the retrain requires. Since the follow-up PR the
+pipeline's scope stage resolves them (``cohort_contract.resolve_required_features``)
+and records ``required_features_source == "contract"``; the sweep's builder passes the
+contract through and invents no candidates. These tests drive the real
 consumers: the registry row as the migration writes it -> ``contract_from_registry_row``
 -> the sweep's input builder -> the REAL pipeline scope stage and scope_definer graph ->
 ``scope_spec`` -> the data_preparer's ``finalize_output``.
@@ -137,11 +140,16 @@ def _finalize_state(scope_spec: Dict[str, Any], columns: List[str]) -> Dict[str,
 
 
 @pytest.mark.parametrize("model", sorted(ROWS))
-def test_the_retrain_input_declares_the_contract_covariates(model: str) -> None:
+def test_the_retrain_input_hands_the_declaring_contract_to_the_pipeline(model: str) -> None:
+    """The builder invents nothing: the contract's columns reach the pipeline's scope
+    stage, which resolves them (``resolve_required_features``, the one place) and records
+    the provenance — see the end-to-end tests below."""
     input_data = _cohort_input_from_training_config(contract_from_registry_row(ROWS[model]))
 
-    assert input_data["candidate_features"] == _covariates(model)
-    assert ROWS[model]["cohort_target_outcome"] not in input_data["candidate_features"]
+    target = ROWS[model]["cohort_target_outcome"]
+    assert "candidate_features" not in input_data
+    assert set(input_data["data_source"]["columns"]) == set(_covariates(model)) | {target}
+    assert input_data["target_variable_hint"] == target
 
 
 def test_an_explicit_candidate_list_wins_over_the_contract_columns() -> None:
@@ -177,6 +185,7 @@ async def test_the_real_scope_stage_requires_exactly_the_contract_covariates(mod
     scope_spec = await _scope_spec_for(model)
 
     assert scope_spec["required_features"] == _covariates(model)
+    assert scope_spec["required_features_source"] == "contract"
 
 
 @pytest.mark.unit

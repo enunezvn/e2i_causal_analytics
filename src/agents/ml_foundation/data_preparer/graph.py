@@ -623,7 +623,12 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # Blockers (same as blocking_issues)
         blockers = (blocking_issues or []).copy()
         if missing_required_features:
-            blockers.append(f"Missing required features: {', '.join(missing_required_features)}")
+            # #2335: name where the requirement was declared (explicit | contract).
+            source = scope_spec.get("required_features_source") or "unrecorded source"
+            blockers.append(
+                f"Missing required features (declared by {source}): "
+                f"{', '.join(missing_required_features)}"
+            )
 
         # Phase 1 of causal-role propagation (Issue #237 reframe).
         # Derive typed RoleAttribution rows from adaptive_verdicts + the

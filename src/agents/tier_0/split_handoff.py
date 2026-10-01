@@ -26,8 +26,9 @@ after every data_preparer node, including leakage remediation; the transformer's
   estimator or leaks identifiers, codex r2 HIGH-2 / r3 HIGH-3). Object columns whose
   distinct-value ratio exceeds ``IDENTIFIER_CARDINALITY_RATIO`` are dropped as
   identifiers even under the absolute cutoff. The scope's ``required_features`` is NOT
-  used as an allowlist: without caller-supplied candidates it is a placeholder list
-  (``scope_builder._define_required_features``).
+  used as an allowlist: it is the declared readiness requirement (explicit candidates or
+  the table contract's columns, #2335), checked by the data_preparer, not a feature
+  selection.
 
 Categorical columns are left in: ``model_trainer.nodes.preprocessor`` one-hot encodes
 them. Every split gets a DISJOINT RangeIndex (codex r2 MED-3): the loaders reset each

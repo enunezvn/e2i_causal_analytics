@@ -41,6 +41,7 @@ def _input() -> Dict[str, Any]:
         "business_objective": "Target likely initiators",
         "target_outcome": "treatment_initiated",
         "brand": "Remibrutinib",
+        "candidate_features": ["disease_severity"],  # #2335: declared requirement
     }
 
 

@@ -68,6 +68,9 @@ async def test_trigger_retraining_threads_cohort_into_training_config() -> None:
         "target_outcome": "initiated_biologic_180d",
         "brand": "competitor",
         "feature_manifest_source": "optum",
+        # #2335: a file route declares no columns, so the request declares the
+        # requirement (the trigger refuses an undeclared one with 422).
+        "candidate_features": ["age_at_index", "atopy_score"],
     }
 
     with (

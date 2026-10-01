@@ -27,6 +27,8 @@ _BASE_STATE = {
     "brand": "competitor",
     "region": "all",
     "use_case": "commercial_targeting",
+    # #2335: the requirement is declared, never invented.
+    "candidate_features": ["age_at_index"],
 }
 
 

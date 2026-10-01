@@ -50,6 +50,9 @@ class RetrainRefusedError(RuntimeError):
       contract, runs the whole pipeline and fails at ``containerize``.
     - ``unreadable_registry_identity``: the row resolves but its model name / version /
       experiment cannot be read (#2242 codex r1), so its candidate could not be attached.
+    - ``undeclared_required_features``: the effective contract (request over the registry
+      row) declares no required features (#2335) — no ``candidate_features`` and no table
+      contract ``columns`` beyond the target — so the scope stage would fail closed.
     """
 
     def __init__(self, handle: str, reason: str, message: str):
@@ -59,9 +62,12 @@ class RetrainRefusedError(RuntimeError):
 
     @property
     def http_status(self) -> int:
-        """404 when the handle names no registered model; 409 when the row's state (an
-        unreadable identity) blocks the retrain."""
-        return 404 if self.reason == "no_registry_identity" else 409
+        """404 when the handle names no registered model; 422 when the request's contract
+        declares no required features (#2335); 409 when the row's state (an unreadable
+        identity) blocks the retrain."""
+        if self.reason == "no_registry_identity":
+            return 404
+        return 422 if self.reason == "undeclared_required_features" else 409
 
 
 class RetrainingStatus(str, Enum):
@@ -361,6 +367,8 @@ class RetrainingTriggerService:
         # jobs). A registered request with no contract anywhere still fails closed at
         # execution. The row id becomes ml_retraining_history.model_id.
         from src.services.cohort_contract import (
+            UNDECLARED_REQUIRED_FEATURES,
+            declared_required_features,
             load_registry_cohort_contract,
             load_registry_model_identity,
             merge_contracts,
@@ -398,6 +406,27 @@ class RetrainingTriggerService:
                 "readable identity (model name / version / experiment) — refusing a "
                 "retrain its candidate could not be attached to",
             )
+        effective_cohort = merge_contracts(cohort, registry_contract)
+        # #2335: the retrain's scope stage fails closed on an undeclared requirement, so the
+        # contract the job would FINALLY run with (request over the registry row, then the
+        # overrides — codex r1) is checked HERE, before any telemetry read (codex r2): a
+        # contract declaring none is refused, nothing recorded, nothing enqueued.
+        final_contract = {**effective_cohort, **(config_overrides or {})}
+        if (
+            declared_required_features(
+                final_contract.get("candidate_features"),
+                final_contract.get("data_source"),
+                targets=(final_contract.get("target_outcome"),),
+            )
+            is None
+        ):
+            raise RetrainRefusedError(
+                model_version,
+                "undeclared_required_features",
+                f"retrain of {model_version!r} declares no required features: "
+                f"{UNDECLARED_REQUIRED_FEATURES} (pass candidate_features, or a table "
+                "cohort data_source whose columns hold more than the target)",
+            )
 
         drift_repo = DriftHistoryRepository(client)
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=20)
@@ -418,7 +447,6 @@ class RetrainingTriggerService:
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
 
-        effective_cohort = merge_contracts(cohort, registry_contract)
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
         if effective_cohort:
             training_config.update(effective_cohort)
@@ -841,8 +869,9 @@ async def evaluate_and_trigger_retraining(
                 cohort=cohort,
             )
         except RetrainRefusedError as refused:
-            # #2319 item 2: the sweep passes registry ids, so this is reached only by an
-            # evaluation of a handle with no (readable) registry identity.
+            # #2319 item 2: the sweep passes registry ids, so this is reached by a handle
+            # with no (readable) registry identity, or (#2335) a contract that declares no
+            # required features.
             logger.warning("Retraining for %s refused: %s", model_version, refused)
             result["retraining_triggered"] = False
             result["retraining_blocked_reason"] = refused.reason

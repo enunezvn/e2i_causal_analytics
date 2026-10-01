@@ -15,6 +15,10 @@ from src.agents.ml_foundation.scope_definer.nodes.scope_builder import (
     build_scope_spec,
 )
 
+# #2335: the requirement is declared, never invented — scope_builder fails closed
+# without candidates (tests/.../test_declared_required_features_2335.py).
+_DECLARED = {"candidate_features": ["feature_a", "feature_b"]}
+
 
 @pytest.mark.asyncio
 async def test_build_scope_spec_creates_complete_spec():
@@ -30,7 +34,7 @@ async def test_build_scope_spec_creates_complete_spec():
         "use_case": "hcp_targeting",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     # Check required output fields
     assert "experiment_id" in result
@@ -70,7 +74,7 @@ async def test_experiment_id_format():
         "target_outcome": "Test",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     experiment_id = result["experiment_id"]
 
@@ -100,7 +104,7 @@ async def test_experiment_name_includes_brand_and_outcome():
         "inferred_target_variable": "will_prescribe",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     experiment_name = result["experiment_name"]
 
@@ -232,7 +236,7 @@ async def test_build_scope_includes_regulatory_constraints():
         "brand": "Test",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     regulatory = result["scope_spec"]["regulatory_constraints"]
 
@@ -251,7 +255,7 @@ async def test_build_scope_includes_ethical_constraints():
         "brand": "Test",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     ethical = result["scope_spec"]["ethical_constraints"]
 
@@ -273,7 +277,7 @@ async def test_build_scope_uses_candidate_features_if_provided():
         "candidate_features": custom_features,
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
 
     required_features = result["scope_spec"]["required_features"]
 
@@ -359,7 +363,7 @@ async def test_build_scope_propagates_prediction_timestamp_when_provided():
         "prediction_timestamp": ts,
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
 
     assert "prediction_timestamp" in scope_spec
@@ -376,7 +380,7 @@ async def test_build_scope_prediction_timestamp_absent_when_unset():
         "brand": "Test",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
 
     # Block 1B threading rule: the field is always present in the spec for a
@@ -432,7 +436,7 @@ async def test_build_scope_propagates_cost_matrix_when_provided():
         "cost_matrix": cm,
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
 
     assert "cost_matrix" in scope_spec
@@ -453,7 +457,7 @@ async def test_build_scope_cost_matrix_absent_when_unset():
         "brand": "Test",
     }
 
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert "cost_matrix" in scope_spec
     assert scope_spec["cost_matrix"] is None
@@ -476,7 +480,7 @@ async def test_d1_user_override_passes_through_with_user_override_source():
         "brand": "Test",
         "sufficiency": {"target_mde": 0.07, "epv_floor": 10},
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert "sufficiency" in scope_spec
     assert scope_spec["sufficiency"]["target_mde"] == 0.07
@@ -497,7 +501,7 @@ async def test_d1_data_driven_binary_computes_from_baseline_rate():
         "brand": "Test",
         "baseline_rate": 0.30,
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert scope_spec["sufficiency"]["target_mde_source"] == "computed_from_data"
     # max(0.05 floor, 0.20 * 0.30) = max(0.05, 0.06) = 0.06
@@ -515,7 +519,7 @@ async def test_d1_data_driven_regression_computes_from_sigma_outcome():
         "brand": "Test",
         "sigma_outcome": 4.0,
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert scope_spec["sufficiency"]["target_mde_source"] == "computed_from_data"
     assert scope_spec["sufficiency"]["target_mde"] == 2.0  # 0.5 * 4.0
@@ -538,7 +542,7 @@ async def test_d1_literature_default_emits_loud_warning(caplog):
         # No baseline_rate, no user override → literature fallback.
     }
     with caplog.at_level(logging.WARNING):
-        result = await build_scope_spec(state)
+        result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert scope_spec["sufficiency"]["target_mde_source"] == "literature_default"
     # WARN fires (audit signal in BOTH the log AND the field).
@@ -560,7 +564,7 @@ async def test_d1_user_override_does_not_emit_warning(caplog):
         "sufficiency": {"target_mde": 0.10},
     }
     with caplog.at_level(logging.WARNING):
-        await build_scope_spec(state)
+        await build_scope_spec({**_DECLARED, **state})
     # No literature-default warning.
     assert not any("literature default" in r.message for r in caplog.records)
 
@@ -579,7 +583,7 @@ async def test_d1_data_driven_does_not_emit_warning(caplog):
         "baseline_rate": 0.30,
     }
     with caplog.at_level(logging.WARNING):
-        await build_scope_spec(state)
+        await build_scope_spec({**_DECLARED, **state})
     assert not any("literature default" in r.message for r in caplog.records)
 
 
@@ -595,7 +599,7 @@ async def test_d1_unset_for_multiclass_when_no_user_override():
         "target_outcome": "Test",
         "brand": "Test",
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     # No sufficiency field at all (user provided nothing + no scope-time signal).
     assert "sufficiency" not in scope_spec
@@ -633,7 +637,7 @@ async def test_r24_causal_inference_defers_when_no_user_override(caplog):
         # No user override, no baseline_rate / sigma — pure defer case.
     }
     with caplog.at_level(logging.WARNING):
-        result = await build_scope_spec(state)
+        result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     # No scope-time literature_default value written.
     if "sufficiency" in scope_spec:
@@ -673,7 +677,7 @@ async def test_r24_causal_inference_user_override_still_wins(caplog):
         "sufficiency": {"target_mde": 0.08, "epv_floor": 10},
     }
     with caplog.at_level(logging.WARNING):
-        result = await build_scope_spec(state)
+        result = await build_scope_spec({**_DECLARED, **state})
     scope_spec = result["scope_spec"]
     assert scope_spec["sufficiency"]["target_mde"] == 0.08
     assert scope_spec["sufficiency"]["target_mde_source"] == "user_override"
@@ -698,7 +702,7 @@ async def test_r24_causal_inference_no_user_override_no_warn(caplog):
         "brand": "Test",
     }
     with caplog.at_level(logging.WARNING):
-        await build_scope_spec(state)
+        await build_scope_spec({**_DECLARED, **state})
     assert not any("literature default" in r.message for r in caplog.records), (
         "scope-build should be silent on causal_inference defer path"
     )
@@ -728,7 +732,7 @@ async def test_r23_scope_builder_resolver_roundtrip_preserves_computed_from_data
         "brand": "Test",
         "baseline_rate": 0.30,
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec_suff = result["scope_spec"]["sufficiency"]
     # scope_builder stamped computed_from_data.
     assert scope_spec_suff["target_mde_source"] == "computed_from_data"
@@ -761,7 +765,7 @@ async def test_r23_scope_builder_resolver_roundtrip_preserves_literature_default
         "brand": "Test",
         # No baseline_rate → literature_default path.
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec_suff = result["scope_spec"]["sufficiency"]
     assert scope_spec_suff["target_mde_source"] == "literature_default"
     resolution = resolve_target_mde(
@@ -787,7 +791,7 @@ async def test_r23_user_override_stamp_is_preserved():
         "brand": "Test",
         "sufficiency": {"target_mde": 0.07},
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec_suff = result["scope_spec"]["sufficiency"]
     assert scope_spec_suff["target_mde_source"] == "user_override"
     resolution = resolve_target_mde(
@@ -824,7 +828,7 @@ async def test_r22_regression_with_large_sigma_outcome_survives_schema():
         "brand": "Test",
         "sigma_outcome": 4.0,  # → target_mde = 2.0, was rejected pre-R2.2
     }
-    result = await build_scope_spec(state)
+    result = await build_scope_spec({**_DECLARED, **state})
     scope_spec_dict = result["scope_spec"]
     # scope_builder computed the value.
     assert scope_spec_dict["sufficiency"]["target_mde"] == 2.0
@@ -870,6 +874,7 @@ async def test_e2e_audit_chain_binary_source_flows_to_report():
 
     scope_result = await build_scope_spec(
         {
+            **_DECLARED,
             "inferred_problem_type": "binary_classification",
             "inferred_target_variable": "y",
             "target_outcome": "Test",
@@ -914,6 +919,7 @@ async def test_e2e_audit_chain_causal_defer_no_fake_user_override():
 
     scope_result = await build_scope_spec(
         {
+            **_DECLARED,
             "inferred_problem_type": "causal_inference",
             "inferred_target_variable": "y",
             "target_outcome": "Test",

@@ -38,6 +38,7 @@ def _real_output() -> Dict[str, Any]:
         "region": "all",
         "use_case": "commercial_targeting",
         "performance_requirements": {},
+        "candidate_features": ["specialty", "years_experience"],  # #2335
     }
 
     async def _build() -> Dict[str, Any]:

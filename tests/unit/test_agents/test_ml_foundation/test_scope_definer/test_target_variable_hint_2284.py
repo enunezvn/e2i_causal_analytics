@@ -269,6 +269,7 @@ async def test_the_agent_threads_the_hint_onto_scope_spec_prediction_target():
             "target_outcome": PHYSICAL_TARGET,
             "target_variable_hint": PHYSICAL_TARGET,
             "brand": "Kisqali",
+            "candidate_features": ["specialty"],  # #2335: declared requirement
         }
     )
 
@@ -285,6 +286,7 @@ async def test_the_agent_without_a_hint_still_rewrites():
             "business_objective": "Grow adoption",
             "target_outcome": "likely to adopt",
             "brand": "Kisqali",
+            "candidate_features": ["specialty"],  # #2335: declared requirement
         }
     )
 
@@ -322,6 +324,7 @@ async def _scope_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
         "problem_description": "p",
         "business_objective": "b",
         "target_outcome": PHYSICAL_TARGET,
+        "candidate_features": ["specialty"],  # #2335: declared requirement
     }
     with patch.object(pipeline, "_get_agent", return_value=fake_scope):
         with pytest.raises(_StopAfterScopeInput):
@@ -382,6 +385,7 @@ async def test_the_retrain_contract_reaches_scope_spec_unrewritten():
             "business_objective": input_data["business_objective"],
             "target_outcome": input_data["target_outcome"],
             "target_variable_hint": input_data["target_variable_hint"],
+            "candidate_features": ["specialty"],  # #2335: declared requirement
         }
     )
 
@@ -498,6 +502,7 @@ async def test_the_pipeline_still_rewrites_a_natural_language_target():
             "business_objective": "Grow adoption",
             "target_outcome": "likely to adopt",
             "data_source": "business_metrics",
+            "candidate_features": ["specialty"],  # #2335: declared requirement
         },
         result,
         None,
@@ -533,6 +538,7 @@ async def _real_output(hint: Optional[str]) -> Dict[str, Any]:
         "region": "all",
         "use_case": "commercial_targeting",
         "performance_requirements": {},
+        "candidate_features": ["specialty"],  # #2335: declared requirement
     }
     if hint:
         state["target_variable_hint"] = hint
