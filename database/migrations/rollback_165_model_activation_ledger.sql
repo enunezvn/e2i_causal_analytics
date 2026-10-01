@@ -17,7 +17,9 @@
 
 -- The live-row check runs under ACCESS EXCLUSIVE on the ledger (held to the end of this
 -- transaction): an insert still in flight either commits first and is seen here, or waits
--- until the rollback is done and then fails on the renamed table (codex r1).
+-- until the rollback is done and then fails on the renamed table (codex r1). A registry writer
+-- whose role guard needs the ledger meanwhile fails at once (the guard takes it NOWAIT) instead
+-- of deadlocking with the DROP TRIGGER below (codex r2): retry it after the rollback.
 DO $$
 BEGIN
     IF to_regclass('public.ml_model_activations') IS NOT NULL THEN
@@ -51,6 +53,7 @@ BEGIN
 END $$;
 
 DROP FUNCTION IF EXISTS public.ml_model_registry_activation_role_guard();
+DROP FUNCTION IF EXISTS public._activation_ledger_share_nowait();
 DROP FUNCTION IF EXISTS public.rollback_model_activation(uuid);
 DROP FUNCTION IF EXISTS public.activate_model_candidate(uuid);
 DROP FUNCTION IF EXISTS public._activation_lock_and_count_served(text, uuid);

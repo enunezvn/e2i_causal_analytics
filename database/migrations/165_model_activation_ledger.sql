@@ -24,7 +24,9 @@
 --     every number in Postgres, so a string never counts as a number.
 --   * The ledger INSERT takes the same per-name advisory lock and SHARE ROW EXCLUSIVE registry
 --     lock as the RPCs before it counts canonical rows, so a concurrent registry writer is
---     either counted or waits and then meets the role guard (codex r1).
+--     either counted or waits and then meets the role guard (codex r1). Every lock wait in
+--     165's functions is bounded by a function-scoped lock_timeout of 10 s (SET on the
+--     function, so the caller's own setting is untouched -- codex r2).
 --   * abort_serving_restored_at -- an abort after the candidate bundle went live reaches
 --     'aborted' only once the predecessor bundle is live again and verified (codex r1).
 --   * activate_model_candidate() / rollback_model_activation() -- SECURITY DEFINER RPCs that
@@ -34,7 +36,9 @@
 --     (register_model_row's upsert) keeps refitting an activation's rows but can no longer
 --     change their stage, champion flag or registered_at (OD-5); and no OTHER row of that name
 --     may become canonical or champion while the activation is live. It runs in the writer's
---     own transaction, so there is no check-then-write race.
+--     own transaction, so there is no check-then-write race. It reads the ledger only after
+--     taking it NOWAIT, so while the 165 rollback (or other DDL) holds the ledger a registry
+--     writer fails at once with a clear error rather than deadlocking with it (codex r2).
 --   * ml_activation_rpc_authority -- how the two RPCs (and only they) get past that guard: each
 --     writes its own transaction id there before touching the registry and deletes it before
 --     returning. No API role can read or write the table. (A custom GUC flag would not do:
@@ -338,9 +342,10 @@ CREATE TRIGGER tr_ml_model_activations_guard BEFORE UPDATE ON public.ml_model_ac
 -- that got in first is counted once it commits; one that comes later waits for this
 -- transaction and then meets the role guard. The trigger runs as the inserting role:
 -- service_role's UPDATE on ml_model_registry permits SHARE ROW EXCLUSIVE (PG: any lock mode
--- with UPDATE, DELETE or TRUNCATE). lock_timeout stays set for the rest of the transaction.
+-- with UPDATE, DELETE or TRUNCATE). lock_timeout is the function's own (SET below), so a wait
+-- here fails after 10 s and the caller's setting is restored when the trigger returns.
 CREATE OR REPLACE FUNCTION public.ml_model_activations_insert_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, public SET lock_timeout = '10s' AS $$
 DECLARE k int;
 BEGIN
     IF NEW.phase <> 'prepared' OR NEW.serving_switched_at IS NOT NULL OR NEW.activated_at IS NOT NULL
@@ -355,7 +360,6 @@ BEGIN
             NEW.predecessor_bundle_sha256, NEW.model_name, NEW.served_stage::text) IS NOT TRUE THEN
         RAISE EXCEPTION 'ml_model_activations: gate report does not satisfy the acceptance rule';
     END IF;
-    PERFORM set_config('lock_timeout', '10s', true);
     PERFORM pg_advisory_xact_lock(hashtextextended('ml_model_activation:' || NEW.model_name, 0));
     LOCK TABLE public.ml_model_registry IN SHARE ROW EXCLUSIVE MODE;
     PERFORM 1 FROM public.ml_model_registry
@@ -392,14 +396,15 @@ CREATE TRIGGER tr_ml_model_activations_insert_guard BEFORE INSERT ON public.ml_m
 -- whatever is_synthetic says -- resolve_canonical_model_id does not filter it either).
 -- SHARE ROW EXCLUSIVE blocks every other writer of ml_model_registry until the RPC commits, so
 -- no concurrent INSERT of a new canonical row can slip between the count and the commit; the
--- advisory lock serialises the RPCs per name. lock_timeout makes a stuck writer an error, not
+-- advisory lock serialises the RPCs per name. lock_timeout (function-scoped SET, here and on
+-- the RPCs, restored on return -- never leaked into the caller's transaction) makes a stuck
+-- writer an error, not
 -- a hang.
 -- ---------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public._activation_lock_and_count_served(p_name text, p_expect uuid)
-RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, public SET lock_timeout = '10s' AS $$
 DECLARE k int; ids text;
 BEGIN
-    PERFORM set_config('lock_timeout', '10s', true);
     PERFORM pg_advisory_xact_lock(hashtextextended('ml_model_activation:' || p_name, 0));
     LOCK TABLE public.ml_model_registry IN SHARE ROW EXCLUSIVE MODE;
     SELECT count(*), string_agg(id::text, ',' ORDER BY id) INTO k, ids FROM public.ml_model_registry
@@ -416,7 +421,8 @@ END $$;
 -- registry and deletes it before returning (an error rolls the row back with everything else).
 -- ---------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.activate_model_candidate(p_activation_id uuid)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+SET lock_timeout = '10s' AS $$
 DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
@@ -481,7 +487,8 @@ END $$;
 -- (rollback_serving_at set). Sets rollback_db_at; the phase stays 'rolling_back' until the CLI
 -- has also restored MLflow and the SHAP cache, then the CLI moves it to 'rolled_back'.
 CREATE OR REPLACE FUNCTION public.rollback_model_activation(p_activation_id uuid)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+SET lock_timeout = '10s' AS $$
 DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
@@ -536,10 +543,24 @@ END $$;
 -- Enforced inside the writer's own transaction; the RPCs' table lock orders it after a
 -- concurrent switch. Named to sort BEFORE tr_single_champion (BEFORE row triggers fire in name
 -- order), so a restored champion flag is what that trigger sees.
+-- Before each read of the ledger the guard takes ACCESS SHARE on it NOWAIT (codex r2): that
+-- conflicts only with ACCESS EXCLUSIVE, i.e. migration 165's rollback file or other DDL. The
+-- rollback holds the ledger and then needs the registry (DROP TRIGGER); a writer already
+-- holding ROW EXCLUSIVE on the registry that waited for the ledger would close a deadlock
+-- cycle, so it fails at once instead (lock_not_available, clear message) and frees the registry.
 -- SECURITY DEFINER so that any registry writer can read the ledger and the RPC authority it
 -- checks; the only bypass is a row for the writer's own transaction in
 -- ml_activation_rpc_authority, which only the two RPCs (and the owner) can write.
 -- ---------------------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._activation_ledger_share_nowait() RETURNS void
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+    LOCK TABLE public.ml_model_activations IN ACCESS SHARE MODE NOWAIT;
+EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'ml_model_registry: the activation ledger is locked by DDL (is the migration 165 rollback running?); retry this write once it has finished (#2318)'
+        USING ERRCODE = 'lock_not_available';
+END $$;
+
 CREATE OR REPLACE FUNCTION public.ml_model_registry_activation_role_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
@@ -550,6 +571,7 @@ BEGIN
         RETURN NEW;   -- one of the two RPCs, inside its own transaction
     END IF;
     IF TG_OP = 'UPDATE' THEN
+        PERFORM public._activation_ledger_share_nowait();
         SELECT a.candidate_registry_id INTO live_candidate FROM public.ml_model_activations a
          WHERE a.phase IN ('prepared', 'serving_switched', 'active', 'aborting', 'rolling_back')
            AND OLD.id IN (a.predecessor_registry_id, a.candidate_registry_id);
@@ -588,6 +610,9 @@ BEGIN
             OR ((NEW.stage IS NULL OR NEW.stage NOT IN ('candidate', 'archived', 'deprecated'))
                 AND NOT (OLD.stage IS NULL OR OLD.stage NOT IN ('candidate', 'archived', 'deprecated')))
             OR (coalesce(NEW.is_champion, false) AND NOT coalesce(OLD.is_champion, false));
+    END IF;
+    IF becomes THEN
+        PERFORM public._activation_ledger_share_nowait();
     END IF;
     IF becomes AND EXISTS (
         SELECT 1 FROM public.ml_model_activations a
@@ -636,6 +661,8 @@ REVOKE ALL ON FUNCTION public._activation_lock_and_count_served(text, uuid) FROM
 REVOKE ALL ON FUNCTION public.activate_model_candidate(uuid) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.rollback_model_activation(uuid) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.ml_model_registry_activation_role_guard() FROM PUBLIC, anon, authenticated, service_role;
+-- Called only by the role guard, which runs as its owner (SECURITY DEFINER).
+REVOKE ALL ON FUNCTION public._activation_ledger_share_nowait() FROM PUBLIC, anon, authenticated, service_role;
 -- The insert trigger runs as the inserting role and calls the predicate.
 GRANT EXECUTE ON FUNCTION public.activation_gate_config() TO service_role;
 GRANT EXECUTE ON FUNCTION public._activation_num(jsonb, text[]) TO service_role;

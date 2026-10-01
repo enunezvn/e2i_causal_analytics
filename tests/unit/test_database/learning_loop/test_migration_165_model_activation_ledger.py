@@ -1231,6 +1231,122 @@ def test_the_rpc_token_table_is_owner_only_and_empty_after_each_rpc(db):
     assert s.canonical() == [s.p] and s.ledger(aid)["rollback_db_at"] is not None
 
 
+def _token_count(c: Any) -> int:
+    """Rows in the RPC authority, seen by the owner inside the caller's own transaction."""
+    c.execute("reset role")
+    (n,) = c.execute("select count(*) from ml_activation_rpc_authority").fetchone()
+    c.execute('set role "service_role"')
+    return n
+
+
+def _stage(c: Any, rid: str) -> str:
+    (stage,) = c.execute(
+        "select stage::text from ml_model_registry where id = %s", (rid,)
+    ).fetchone()
+    return stage
+
+
+def test_a_failed_rpc_leaves_no_token_behind_a_savepoint(db):
+    """codex r2 LOW: an RPC that fails AFTER writing its token, recovered through a savepoint
+    in the same outer transaction, leaves no token: the guard still holds in that transaction."""
+    # activate: the token is written, then the predecessor re-check fails.
+    s = Slot(db)
+    aid = s.switched()
+    _owner_write(db, "update ml_model_registry set artifact_path = '/moved.pkl' where id = %s",
+                 (s.p,))  # fmt: skip
+    # rollback: the token is written, then the single-canonical-row check fails.
+    t = Slot(db)
+    tid = t.switched()
+    t.activate(tid)
+    t.begin_rollback(tid)
+    _owner_write(db, "insert into ml_model_registry (experiment_id, model_name, model_version, "
+                     "algorithm, stage) values (%s, %s, '0.9', 'lr', 'development')",
+                 (t.exp, t.name))  # fmt: skip
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        for rpc, ledger_id, match in (
+            ("activate_model_candidate", aid, "changed since the gate ran"),
+            ("rollback_model_activation", tid, "exactly one canonical"),
+        ):
+            c.execute("savepoint before_rpc")
+            with _raises(match):
+                c.execute(f"select public.{rpc}(%s)", (ledger_id,))
+            c.execute("rollback to savepoint before_rpc")
+            assert _token_count(c) == 0, rpc
+        c.execute("update ml_model_registry set stage = 'production' where id = %s", (s.p,))
+        c.execute("update ml_model_registry set stage = 'staging' where id = %s", (t.c,))
+        assert (_stage(c, s.p), _stage(c, t.c)) == ("staging", "staging")  # roles held
+        c.commit()
+    assert s.ledger(aid)["phase"] == "serving_switched" and t.ledger(tid)["rollback_db_at"] is None
+
+
+def test_an_idempotent_rpc_rerun_leaves_no_token_and_the_guard_holds(db):
+    s = Slot(db)
+    aid = s.switched()
+    s.activate(aid)
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        c.execute("select public.activate_model_candidate(%s)", (aid,))  # verify-only re-run
+        assert _token_count(c) == 0
+        c.execute("update ml_model_registry set stage = 'staging', is_champion = true "
+                  "where id = %s", (s.p,))  # fmt: skip
+        assert _stage(c, s.p) == "archived"
+        c.commit()
+    s.begin_rollback(aid)
+    s.rollback_db(aid)
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        c.execute("select public.rollback_model_activation(%s)", (aid,))  # verify-only re-run
+        assert _token_count(c) == 0
+        c.execute("update ml_model_registry set stage = 'staging' where id = %s", (s.c,))
+        assert _stage(c, s.c) == "archived"
+        c.commit()
+
+
+def test_the_lock_helpers_do_not_leak_lock_timeout_into_the_caller(db):
+    """codex r2 MEDIUM: the 10 s lock_timeout is function-scoped (SET on the function), so a
+    caller's own policy is intact after a ledger insert and after each RPC."""
+    s = Slot(db)
+    sql, vals = s.insert_sql()
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        c.execute("set local lock_timeout = '3min'")
+
+        def lock_timeout() -> str:
+            return c.execute("select current_setting('lock_timeout')").fetchone()[0]
+
+        assert lock_timeout() == "3min"
+        (aid,) = c.execute(sql, vals).fetchone()
+        assert lock_timeout() == "3min", "after the ledger insert"
+        c.execute("update ml_model_activations set phase = 'serving_switched', "
+                  "serving_switched_at = now() where id = %s", (aid,))  # fmt: skip
+        c.execute("select public.activate_model_candidate(%s)", (aid,))
+        assert lock_timeout() == "3min", "after activate_model_candidate"
+        c.execute("update ml_model_activations set phase = 'rolling_back', rolled_back_by = 'o', "
+                  "rollback_reason = 'r' where id = %s", (aid,))  # fmt: skip
+        c.execute("update ml_model_activations set rollback_serving_at = now() where id = %s",
+                  (aid,))  # fmt: skip
+        c.execute("select public.rollback_model_activation(%s)", (aid,))
+        assert lock_timeout() == "3min", "after rollback_model_activation"
+        c.commit()
+    assert s.canonical() == [s.p]
+
+
+def test_a_held_registry_lock_still_times_out_the_ledger_insert(db):
+    """Inside the insert guard the 10 s lock_timeout still applies, whatever the caller's."""
+    s = Slot(db)
+    sql, vals = s.insert_sql()
+    with db.connect() as holder:
+        holder.execute("lock table ml_model_registry in row exclusive mode")
+        t0 = time.monotonic()
+        ins = _Background(db, sql, vals)  # the caller keeps the default lock_timeout (0: forever)
+        ins.join()  # 30 s: a guard without its own timeout fails here instead of hanging
+        elapsed = time.monotonic() - t0
+        holder.rollback()
+    assert ins.error is not None and "lock timeout" in str(ins.error), ins.error
+    assert 9.0 <= elapsed < 25.0, elapsed
+
+
 def _wait_until_blocked(db: _pg.PgConn, pid: int, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1560,6 +1676,42 @@ def _wait_until_psql_blocked(db: _pg.PgConn, timeout: float = 30.0) -> None:
             return
         time.sleep(0.05)
     raise AssertionError("the rollback file never blocked on a lock")
+
+
+def test_a_registry_writer_meets_a_running_rollback_fast_instead_of_deadlocking(db):
+    """codex r2 MEDIUM: the rollback holds ACCESS EXCLUSIVE on the ledger and waits for the
+    registry (DROP TRIGGER); a writer holding ROW EXCLUSIVE on the registry whose role guard
+    then needs the ledger would close a cycle. The guard takes the ledger NOWAIT, so the writer
+    fails at once with a clear error and the rollback completes."""
+    import psycopg
+
+    s = Slot(db)  # nothing live: the rollback's own check passes
+    out: Dict[str, Any] = {}
+    with db.connect() as w:
+        w.execute('set role "service_role"')
+        # A new retrain candidate: ROW EXCLUSIVE on the registry; the guard never reads the ledger.
+        w.execute("insert into ml_model_registry (experiment_id, model_name, model_version, "
+                  "algorithm, stage) values (%s, %s, '1.2_retrained_x', 'lr', 'candidate')",
+                  (s.exp, s.name))  # fmt: skip
+        worker = threading.Thread(target=lambda: out.update(proc=_rollback(db)), daemon=True)
+        worker.start()
+        try:
+            _wait_until_psql_blocked(db)  # ledger held, waiting for the registry
+            t0 = time.monotonic()
+            with pytest.raises(psycopg.Error) as err:
+                w.execute("update ml_model_registry set auc = 0.5 where id = %s", (s.p,))
+            elapsed = time.monotonic() - t0
+        finally:
+            w.rollback()
+    worker.join(120)
+    assert not worker.is_alive()
+    assert "migration 165" in str(err.value) and "deadlock" not in str(err.value), err.value
+    assert elapsed < 1.0, elapsed  # deadlock_timeout is 1 s: this was NOWAIT, not the detector
+    proc = out["proc"]
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert db.rows("select to_regclass('public.ml_model_activations_retired_165') is not null") == [
+        "t"
+    ]
 
 
 def test_the_rollback_file_waits_for_an_uncommitted_activation_then_refuses(db):
