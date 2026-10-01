@@ -431,6 +431,11 @@ SQL_OBJECTS: Dict[str, Tuple[str, str]] = {
         "#2318 registry trigger (writer): keeps a live activation's roles, refuses a second "
         "canonical/champion row of the name; reads only an exact (model_name, model_version)",
     ),
+    "_activation_ledger_share_nowait": (
+        OPT_IN,
+        "#2318 role-guard helper: takes ACCESS SHARE NOWAIT on the ledger; never reads the "
+        "registry, its error message only names the table",
+    ),
 }
 
 _SQL_DEF = re.compile(
