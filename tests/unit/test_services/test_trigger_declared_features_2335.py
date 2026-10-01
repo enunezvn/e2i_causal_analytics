@@ -187,6 +187,49 @@ async def test_overrides_that_remove_the_declaration_are_refused_too() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_refusal_does_not_depend_on_telemetry_reads() -> None:
+    """codex r2: an unreachable perf backend must not turn the 422 into a 500."""
+    from src.memory.services.factories import ServiceConnectionError
+
+    db, model_id = _db("patient_journeys")
+    service = RetrainingTriggerService()
+    drift_repo = MagicMock()
+    drift_repo.get_latest_drift_status = AsyncMock(
+        side_effect=ServiceConnectionError("perf", "down")
+    )
+    tracker = MagicMock()
+    tracker.get_performance_trend = AsyncMock(side_effect=ServiceConnectionError("perf", "down"))
+    with (
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=db),
+        ),
+        patch("src.repositories.drift_monitoring.DriftHistoryRepository", return_value=drift_repo),
+        patch("src.services.performance_tracking.get_performance_tracker", return_value=tracker),
+    ):
+        with pytest.raises(RetrainRefusedError) as exc:
+            await service.trigger_retraining(
+                model_version=model_id, reason=TriggerReason.MANUAL, cohort=None
+            )
+    assert exc.value.http_status == 422
+    drift_repo.get_latest_drift_status.assert_not_awaited()
+
+
+def test_a_bare_string_candidate_is_not_split_into_characters_by_the_retrain_input() -> None:
+    """codex r2: ``"age"`` beside a valid contract must not become ["a", "g", "e"]."""
+    from src.tasks.drift_monitoring_tasks import _cohort_input_from_training_config
+
+    input_data = _cohort_input_from_training_config(
+        {
+            "data_source": _table_contract(COLUMNS),
+            "target_outcome": "treatment_initiated",
+            "candidate_features": "age",
+        }
+    )
+    assert "candidate_features" not in input_data
+
+
+@pytest.mark.asyncio
 async def test_blank_request_candidates_do_not_declare_the_requirement() -> None:
     db, model_id = _db("patient_journeys")
     with pytest.raises(RetrainRefusedError) as exc:

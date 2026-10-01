@@ -915,9 +915,15 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
     # stage resolves the table contract's columns minus the label and records the
     # provenance (cohort_contract.resolve_required_features, the one place). No declared
     # source fails closed there; the trigger already refuses that contract with a 422.
-    candidates = training_config.get("candidate_features")
-    if candidates:
-        input_data["candidate_features"] = list(candidates)
+    # Normalised by the same resolver: a bare string is not a list (``"age"`` must not
+    # become ["a", "g", "e"]) and blank names declare nothing (codex r2).
+    from src.services.cohort_contract import declared_required_features
+
+    explicit = declared_required_features(
+        training_config.get("candidate_features"), None, targets=()
+    )
+    if explicit is not None:
+        input_data["candidate_features"] = explicit[0]
     return input_data
 
 
