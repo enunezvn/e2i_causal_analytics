@@ -21,8 +21,11 @@ reused across weekly candidates, the candidate's trainer already evaluated on th
 :class:`GateConfig` and in Lane 4's SQL predicate ``activation_gate_passes``; they
 change only by a reviewed PR, never per activation.
 
-For ``hcp_adoption_*`` names (served at ``production``) the #1354 calibration
-pathology gate also runs, because Lane 4's SQL predicate requires it for production.
+The #1354 calibration pathology gate also runs for every ``hcp_adoption_*`` name and
+for every ``production`` target (an owner-allowlisted non-hcp name too), because Lane 4's
+SQL predicate requires it for both. The caller states the target stage
+(``served_stage``); the report records it and the SQL predicate matches it against the
+stage the activation is for.
 """
 
 from __future__ import annotations
@@ -58,6 +61,9 @@ HCP_PATHOLOGY_SLOPE_RANGE = (0.5, 2.0)
 _HCP_PREFIX = "hcp_adoption_"
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# The stages an activation can serve at (Lane 4's ml_model_activations.served_stage CHECK).
+SERVED_STAGES: tuple[str, ...] = ("staging", "production")
 
 # Bootstrap resamples are materialised this many index cells at a time, so memory
 # stays flat for large holdouts (2000 x 1766 is ~7 chunks).
@@ -333,17 +339,22 @@ def evaluate_gate(
     candidate_bundle_sha256: str,
     snapshot: dict[str, Any],
     model_name: str,
+    served_stage: str,
 ) -> dict[str, Any]:
     """Apply the acceptance rule; return a JSON-serialisable report.
 
     ``served`` and ``candidate`` are positive-class probabilities on the SAME rows as
     ``y``. The evidence (both bundle sha256s, the snapshot the rows came from, the
-    model name) is mandatory: a verdict without it could not be tied to what serves
-    (OD-3). Raises ``ValueError`` (nothing is decided) on missing or inconsistent
-    evidence, a non-default ``cfg``, a thin or one-class holdout, misaligned inputs,
-    or non-finite / out-of-range scores. Every other outcome is a report whose
-    ``passed`` is true iff ``failed_checks`` is empty.
+    model name, the stage the candidate would serve at) is mandatory: a verdict without
+    it could not be tied to what serves (OD-3). ``served_stage`` is ``"staging"`` or
+    ``"production"``; the #1354 pathology gate runs for an hcp_adoption name or a
+    production target. Raises ``ValueError`` (nothing is decided) on missing or
+    inconsistent evidence, a non-default ``cfg``, a thin or one-class holdout,
+    misaligned inputs, or non-finite / out-of-range scores. Every other outcome is a
+    report whose ``passed`` is true iff ``failed_checks`` is empty.
     """
+    if served_stage not in SERVED_STAGES:
+        raise ValueError(f"served_stage must be one of {SERVED_STAGES}, got {served_stage!r}")
     if cfg is None:
         cfg = GateConfig()
     if cfg != GateConfig():
@@ -426,9 +437,10 @@ def evaluate_gate(
         "candidate_bundle_sha256": candidate_bundle_sha256,
         "snapshot": snapshot,
         "model_name": model_name,
+        "served_stage": served_stage,
     }
 
-    if _is_hcp(model_name):
+    if _is_hcp(model_name) or served_stage == "production":
         ok, reasons = pathology_gate(
             {"calibration_slope": slope, "brier_score": brier_candidate}, prevalence
         )
